@@ -1,28 +1,37 @@
 import config
-
 import tiktoken
 import openai
+# from openai import AsyncOpenAI
 
+from openai import OpenAI
+from langchain.vectorstores import FAISS
+from langchain.embeddings import OpenAIEmbeddings
 
 # setup openai
-openai.api_key = config.openai_api_key
-if config.openai_api_base is not None:
-    openai.api_base = config.openai_api_base
 
+# if config.openai_api_base is not None:
+    # TODO: The 'openai.api_base' option isn't read in the client API. You will need to pass it when you instantiate the client, e.g. 'OpenAI(api_base=config.openai_api_base)'
+    # openai.api_base = config.openai_api_base
+
+# aclient = AsyncOpenAI(api_key=config.openai_api_key)
+client = OpenAI(api_key=config.openai_api_key)
+embeddings = OpenAIEmbeddings(openai_api_key=config.openai_api_key)
+# faiss_index = FAISS.load_local("oawmh_faiss_index_json", embeddings)
+faiss_index = FAISS.load_local("faiss_index", embeddings)
 
 OPENAI_COMPLETION_OPTIONS = {
-    "temperature": 0.7,
+    "temperature": 0,
     "max_tokens": 1000,
-    "top_p": 1,
-    "frequency_penalty": 0,
-    "presence_penalty": 0,
-    "request_timeout": 60.0,
+    # "top_p": 1,
+    # "frequency_penalty": 0,
+    # "presence_penalty": 0,
+    # "request_timeout": 60.0,
 }
 
 
 class ChatGPT:
-    def __init__(self, model="gpt-3.5-turbo"):
-        assert model in {"text-davinci-003", "gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4", "gpt-4-1106-preview"}, f"Unknown model: {model}"
+    def __init__(self, model="gpt-3.5-turbo-1106"):
+        assert model in {"gpt-3.5-turbo-1106", "gpt-4-1106-preview"}, f"Unknown model: {model}"
         self.model = model
 
     async def send_message(self, message, dialog_messages=[], chat_mode="assistant"):
@@ -33,28 +42,21 @@ class ChatGPT:
         answer = None
         while answer is None:
             try:
-                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4", "gpt-4-1106-preview"}:
+                if self.model in {"gpt-3.5-turbo-1106", "gpt-4-1106-preview"}:
                     messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
-                    r = await openai.ChatCompletion.acreate(
+                    response = client.chat.completions.create(
                         model=self.model,
                         messages=messages,
                         **OPENAI_COMPLETION_OPTIONS
                     )
-                    answer = r.choices[0].message["content"]
-                elif self.model == "text-davinci-003":
-                    prompt = self._generate_prompt(message, dialog_messages, chat_mode)
-                    r = await openai.Completion.acreate(
-                        engine=self.model,
-                        prompt=prompt,
-                        **OPENAI_COMPLETION_OPTIONS
-                    )
-                    answer = r.choices[0].text
+                    answer = response.choices[0].message.content
                 else:
                     raise ValueError(f"Unknown model: {self.model}")
 
                 answer = self._postprocess_answer(answer)
-                n_input_tokens, n_output_tokens = r.usage.prompt_tokens, r.usage.completion_tokens
-            except openai.error.InvalidRequestError as e:  # too many tokens
+                n_input_tokens, n_output_tokens = response.usage.prompt_tokens, response.usage.completion_tokens
+
+            except openai.OpenAIError as e:
                 if len(dialog_messages) == 0:
                     raise ValueError("Dialog messages is reduced to zero, but still has too many tokens to make completion") from e
 
@@ -138,29 +140,40 @@ class ChatGPT:
         prompt = config.chat_modes[chat_mode]["prompt_start"]
 
         messages = [{"role": "system", "content": prompt}]
+
         for dialog_message in dialog_messages:
             messages.append({"role": "user", "content": dialog_message["user"]})
             messages.append({"role": "assistant", "content": dialog_message["bot"]})
         messages.append({"role": "user", "content": message})
 
+        last_message_content = self._process_with_embeddings(message)
+        messages.append({"role": "user", "content": last_message_content})
         return messages
+
+    def _process_with_embeddings(self, message):
+        # Use embeddings and FAISS to augment the message
+        try:
+            # docs = faiss_index.similarity_search(query=message, k=3)
+            docs = faiss_index.max_marginal_relevance_search(query=message, k=2, fetch_k=3)
+            updated_content = message + "\n\n"
+            for doc in docs[:2]:
+                updated_content += doc.page_content + "\n\n"
+        except Exception as e:
+            print(f"Error while fetching : {e}")
+            updated_content = message
+        return updated_content
+
 
     def _postprocess_answer(self, answer):
         answer = answer.strip()
         return answer
 
-    def _count_tokens_from_messages(self, messages, answer, model="gpt-3.5-turbo"):
+    def _count_tokens_from_messages(self, messages, answer, model="gpt-3.5-turbo-1106"):
         encoding = tiktoken.encoding_for_model(model)
 
-        if model == "gpt-3.5-turbo-16k":
-            tokens_per_message = 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
-            tokens_per_name = -1  # if there's a name, the role is omitted
-        elif model == "gpt-3.5-turbo":
+        if model == "gpt-3.5-turbo-1106":
             tokens_per_message = 4
             tokens_per_name = -1
-        elif model == "gpt-4":
-            tokens_per_message = 3
-            tokens_per_name = 1
         elif model == "gpt-4-1106-preview":
             tokens_per_message = 3
             tokens_per_name = 1
@@ -193,16 +206,16 @@ class ChatGPT:
 
 
 async def transcribe_audio(audio_file) -> str:
-    r = await openai.Audio.atranscribe("whisper-1", audio_file)
+    r = await aclient.audio.transcribe("whisper-1", audio_file)
     return r["text"] or ""
 
 
 async def generate_images(prompt, n_images=4, size="512x512"):
-    r = await openai.Image.acreate(prompt=prompt, n=n_images, size=size)
+    r = await aclient.images.generate(prompt=prompt, n=n_images, size=size)
     image_urls = [item.url for item in r.data]
     return image_urls
 
 
 async def is_content_acceptable(prompt):
-    r = await openai.Moderation.acreate(input=prompt)
+    r = await aclient.moderations.create(input=prompt)
     return not all(r.results[0].categories.values())

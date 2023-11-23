@@ -20,6 +20,10 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - mongo
+    volumes:
+      - $HOME/Projects/chatgpt_telegram_bot/config:/code/config:rw
+      - $HOME/Projects/chatgpt_telegram_bot/bot:/code/bot:rw
+      - $HOME/Projects/chatgpt_telegram_bot/faiss_index:/code/faiss_index:rw
 
   mongo_express:
     container_name: mongo-express

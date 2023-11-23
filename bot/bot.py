@@ -1,4 +1,5 @@
 import io
+import os
 import logging
 import asyncio
 import traceback
@@ -42,25 +43,13 @@ user_tasks = {}
 HELP_MESSAGE = """Commands:
 ⚪ /retry – Regenerate last bot answer
 ⚪ /new – Start new dialog
-⚪ /mode – Select chat mode
-⚪ /settings – Show settings
-⚪ /balance – Show balance
 ⚪ /help – Show help
 
-🎨 Generate images from text prompts in <b>👩‍🎨 Artist</b> /mode
-👥 Add bot to <b>group chat</b>: /help_group_chat
-🎤 You can send <b>Voice Messages</b> instead of text
+Important note: the longer your dialog, the more tokens are spent with each new message. To start new dialog, send /new command
 """
 
 HELP_GROUP_CHAT_MESSAGE = """You can add bot to any <b>group chat</b> to help and entertain its participants!
 
-Instructions (see <b>video</b> below):
-1. Add the bot to the group chat
-2. Make it an <b>admin</b>, so that it can see messages (all other rights can be restricted)
-3. You're awesome!
-
-To get a reply from the bot in the chat – @ <b>tag</b> it or <b>reply</b> to its message.
-For example: "{bot_username} write a poem about Telegram"
 """
 
 
@@ -370,7 +359,7 @@ async def generate_image_handle(update: Update, context: CallbackContext, messag
 
     try:
         image_urls = await openai_utils.generate_images(message, n_images=config.return_n_generated_images, size=config.image_size)
-    except openai.error.InvalidRequestError as e:
+    except openai.BadRequestError as e:
         if str(e).startswith("Your request was rejected as a result of our safety system"):
             text = "🥲 Your request <b>doesn't comply</b> with OpenAI's usage policies.\nWhat did you write there, huh?"
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
@@ -503,7 +492,9 @@ async def set_chat_mode_handle(update: Update, context: CallbackContext):
 
 
 def get_settings_menu(user_id: int):
-    current_model = db.get_user_attribute(user_id, "current_model")
+    # current_model = db.get_user_attribute(user_id, "current_model")
+    current_model = "gpt-3.5-turbo-1106"
+
     text = config.models["info"][current_model]["description"]
 
     text += "\n\n"
@@ -639,10 +630,10 @@ async def error_handle(update: Update, context: CallbackContext) -> None:
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("/new", "Start new dialog"),
-        BotCommand("/mode", "Select chat mode"),
+        # BotCommand("/mode", "Select chat mode"),
         BotCommand("/retry", "Re-generate response for previous query"),
-        BotCommand("/balance", "Show balance"),
-        BotCommand("/settings", "Show settings"),
+        # BotCommand("/balance", "Show balance"),
+        # BotCommand("/settings", "Show settings"),
         BotCommand("/help", "Show help message"),
     ])
 
